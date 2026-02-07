@@ -98,14 +98,45 @@ class WindowsTerminalLauncher(TerminalLauncher):
         if not self.is_available():
             raise TerminalNotFoundError("PowerShell is not available on this system. Please install PowerShell to use EasyClaude.")
         try:
-            cmd = self.get_terminal_command(directory, command)
             use_wt = self.prefer_windows_terminal and self._has_wt
             terminal_type = "Windows Terminal" if use_wt else "PowerShell console"
+            
+            # Build the PowerShell command
+            validated_dir = self._validate_directory(directory)
+            validated_cmd = self._validate_command(command)
+            ps_command = self._build_powershell_command(str(validated_dir), validated_cmd)
+            
+            if use_wt:
+                # Windows Terminal requires special handling
+                # Use the wt.exe command-line syntax properly
+                cmd = [
+                    self.WT_EXE,
+                    self._powershell_exe,
+                    "-NoExit",
+                    "-Command",
+                    ps_command
+                ]
+            else:
+                # Standard PowerShell console
+                cmd = [
+                    self._powershell_exe,
+                    "-NoExit",
+                    "-Command",
+                    ps_command
+                ]
+            
             logger.info(f"Launching Claude in {terminal_type}: {directory}")
             logger.debug(f"Command: {' '.join(cmd)}")
-            CREATE_NEW_PROCESS_GROUP = 0x00000200
-            DETACHED_PROCESS = 0x00000008
-            subprocess.Popen(cmd, creationflags=CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            
+            # For wt.exe, we need to use shell=True or launch it differently
+            if use_wt:
+                # Windows Terminal needs to be launched through the shell
+                subprocess.Popen(cmd, shell=True)
+            else:
+                # PowerShell can be launched directly
+                CREATE_NEW_PROCESS_GROUP = 0x00000200
+                subprocess.Popen(cmd, creationflags=CREATE_NEW_PROCESS_GROUP)
+            
             logger.info("Terminal launched successfully")
         except FileNotFoundError as e:
             raise TerminalNotFoundError(f"Failed to launch terminal: {e.filename} not found") from e

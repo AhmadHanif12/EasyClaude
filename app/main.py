@@ -27,8 +27,30 @@ class EasyClaudeApp:
 
     def __init__(self):
         """Initialize the application."""
+        # Configure logging FIRST before anything else
+        import logging
+        from pathlib import Path
+
+        # Set up logging to file and console
+        log_dir = Path(os.getenv('APPDATA', '.')) / 'EasyClaude'
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_file = log_dir / 'easyclaude.log'
+
+        logging.basicConfig(
+            level=logging.DEBUG,
+            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+            handlers=[
+                logging.FileHandler(log_file),
+                logging.StreamHandler(sys.stdout)
+            ]
+        )
+
+        logger = logging.getLogger(__name__)
+        logger.info(f"EasyClaude starting. Log file: {log_file}")
+
         # Load configuration
         self.config = load_config()
+        logger.info(f"Configuration loaded. Hotkey: {self.config.hotkey}")
 
         # Initialize components
         self.launcher = ClaudeLauncher()
@@ -48,6 +70,7 @@ class EasyClaudeApp:
 
         # Register hotkey
         self.hotkey_manager.register(self.show_gui)
+        logger.info("Application initialized successfully")
 
     def _on_launch(self, directory: str, command: str, use_powershell: bool):
         """
@@ -58,11 +81,15 @@ class EasyClaudeApp:
             command: Command to execute
             use_powershell: Whether to use PowerShell
         """
+        import logging
+        logger = logging.getLogger(__name__)
+
         # Save last used settings
         update_config(
             last_directory=directory,
             last_command=command,
         )
+        logger.info(f"Launch requested: directory='{directory}', command='{command}', use_powershell={use_powershell}")
 
         # Launch Claude
         success = self.launcher.launch(
@@ -72,7 +99,7 @@ class EasyClaudeApp:
         )
 
         if not success:
-            print(f"Failed to launch Claude in {directory}")
+            logger.error(f"Failed to launch Claude in {directory}")
 
     def show_gui(self):
         """Show the launcher GUI with last used directory."""
@@ -80,10 +107,12 @@ class EasyClaudeApp:
 
     def _show_config_info(self):
         """Show configuration information."""
-        print(f"EasyClaude Configuration:")
-        print(f"  Hotkey: {self.config.hotkey}")
-        print(f"  Last directory: {self.config.last_directory}")
-        print(f"  Last command: {self.config.last_command}")
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"EasyClaude Configuration:")
+        logger.info(f"  Hotkey: {self.config.hotkey}")
+        logger.info(f"  Last directory: {self.config.last_directory}")
+        logger.info(f"  Last command: {self.config.last_command}")
 
     def _signal_handler(self, signum, frame):
         """Handle shutdown signals."""
@@ -92,6 +121,9 @@ class EasyClaudeApp:
 
     def run(self):
         """Start the application - pystray runs in main thread."""
+        import logging
+        logger = logging.getLogger(__name__)
+
         with self._lock:
             self._running = True
 
@@ -99,9 +131,9 @@ class EasyClaudeApp:
         signal.signal(signal.SIGINT, self._signal_handler)
         signal.signal(signal.SIGTERM, self._signal_handler)
 
-        print("EasyClaude is starting...")
-        print(f"Hotkey: {self.config.hotkey}")
-        print("Press Ctrl+C or use the tray menu to exit.")
+        logger.info("EasyClaude is starting...")
+        logger.info(f"Hotkey: {self.config.hotkey}")
+        logger.info("Press Ctrl+C or use the tray menu to exit.")
 
         # Start the tray icon - this blocks in the main thread
         # pystray will handle the event loop
@@ -113,12 +145,15 @@ class EasyClaudeApp:
 
     def shutdown(self):
         """Shutdown the application gracefully."""
+        import logging
+        logger = logging.getLogger(__name__)
+
         with self._lock:
             if not self._running:
                 return
             self._running = False
 
-        print("Shutting down EasyClaude...")
+        logger.info("Shutting down EasyClaude...")
 
         # Unregister hotkey
         self.hotkey_manager.unregister()
@@ -129,7 +164,7 @@ class EasyClaudeApp:
         # Destroy GUI
         self.gui.destroy()
 
-        print("EasyClaude has shut down.")
+        logger.info("EasyClaude has shut down.")
 
 
 def main():
