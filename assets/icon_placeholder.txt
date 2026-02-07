@@ -1,0 +1,10 @@
+# Tray Icon Placeholder
+
+For production, replace this with a real icon.ico file.
+
+You can create an icon using:
+- GIMP with ICO plugin
+- Online converters from PNG to ICO
+- Visual Studio's icon editor
+
+Recommended: 16x16, 32x32, 48x48 sizes in one ICO file.
