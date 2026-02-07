@@ -139,7 +139,6 @@ class TrayManager:
             bool: True if running
         """
         return self._running
-        return self._running
 
     def update_title(self, title: str) -> None:
         """

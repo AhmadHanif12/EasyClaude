@@ -9,6 +9,7 @@ from tkinter import ttk, filedialog, messagebox
 from typing import Callable, Optional
 import os
 import threading
+import time
 
 
 class LauncherGUI:
@@ -38,35 +39,44 @@ class LauncherGUI:
             launch_callback: Callback function(directory, command, use_powershell)
         """
         self._launch_callback = launch_callback
-        self._gui_thread: Optional[threading.Thread] = None
-        self._running = False
+        self._current_window: Optional[tk.Tk] = None
+        self._window_lock = threading.Lock()
+        self._window_thread: Optional[threading.Thread] = None
+        self._pending_show = False
+        self._pending_directory = ""
 
     def show(self, initial_directory: str = ""):
         """
-        Show the launcher window in a separate thread.
+        Show the launcher window (thread-safe).
+
+        If window is already open, this will update the directory and focus it.
+        If window is closed or closing, this will open a new one.
 
         Args:
             initial_directory: Initial directory to display
         """
-        # Only one GUI at a time
-        if self._running:
-            return
+        with self._window_lock:
+            # Check if there's already a window thread running
+            if self._window_thread is not None and self._window_thread.is_alive():
+                # Window is already open, just update the pending directory
+                # The window will pick it up via polling
+                self._pending_directory = initial_directory
+                self._pending_show = True
+                return
 
-        self._running = True
+            # No window running, start a new one
+            self._pending_directory = initial_directory
+            self._pending_show = True
+            self._window_thread = threading.Thread(
+                target=self._run_window,
+                daemon=False,  # Non-daemon to prevent premature termination
+                name="GUIWindow"
+            )
+            self._window_thread.start()
 
-        def run_gui():
-            try:
-                self._show_window(initial_directory)
-            finally:
-                self._running = False
-
-        # Start GUI in non-daemon thread so it doesn't get killed
-        self._gui_thread = threading.Thread(target=run_gui, daemon=False)
-        self._gui_thread.start()
-
-    def _show_window(self, initial_directory: str):
-        """Create and show the GUI window (runs in GUI thread)."""
-        # Create new window
+    def _run_window(self):
+        """Run the window in a dedicated thread."""
+        # Must create Tk instance in the same thread that runs mainloop
         root = tk.Tk()
         root.title("EasyClaude")
         root.resizable(False, False)
@@ -100,7 +110,7 @@ class LauncherGUI:
         # Directory selection
         ttk.Label(main_frame, text="Directory:").grid(row=1, column=0, sticky=tk.W, pady=5)
 
-        directory_var = tk.StringVar(value=initial_directory)
+        directory_var = tk.StringVar(value=self._pending_directory)
         dir_entry = ttk.Entry(main_frame, textvariable=directory_var, width=40)
         dir_entry.grid(row=1, column=1, sticky=(tk.W, tk.E), pady=5, padx=(5, 5))
 
@@ -115,11 +125,20 @@ class LauncherGUI:
         browse_btn = ttk.Button(main_frame, text="Browse...", command=browse_directory, width=10)
         browse_btn.grid(row=1, column=2, sticky=tk.W, pady=5)
 
+        # PowerShell checkbox
+        powershell_var = tk.BooleanVar()
+        ps_checkbox = ttk.Checkbutton(
+            main_frame,
+            text="Always use PowerShell",
+            variable=powershell_var
+        )
+        ps_checkbox.grid(row=2, column=0, columnspan=3, pady=(15, 5))
+
         # Command buttons
-        ttk.Label(main_frame, text="Command:").grid(row=2, column=0, sticky=tk.W, pady=(15, 5))
+        ttk.Label(main_frame, text="Command:").grid(row=3, column=0, sticky=tk.W, pady=(15, 5))
 
         cmd_frame = ttk.Frame(main_frame)
-        cmd_frame.grid(row=3, column=0, columnspan=3, pady=5, sticky=(tk.W, tk.E))
+        cmd_frame.grid(row=4, column=0, columnspan=3, pady=5, sticky=(tk.W, tk.E))
 
         for i, command in enumerate(self.COMMANDS):
             btn = ttk.Button(
@@ -130,28 +149,43 @@ class LauncherGUI:
             )
             btn.grid(row=i, column=0, pady=3)
 
-        # PowerShell checkbox
-        powershell_var = tk.BooleanVar()
-        ps_checkbox = ttk.Checkbutton(
-            main_frame,
-            text="Always use PowerShell",
-            variable=powershell_var
-        )
-        ps_checkbox.grid(row=4, column=0, columnspan=3, pady=(15, 10))
-
         # Close button
-        close_btn = ttk.Button(main_frame, text="Close", command=root.destroy, width=10)
+        close_btn = ttk.Button(main_frame, text="Close", command=self._request_close, width=10)
         close_btn.grid(row=5, column=0, columnspan=3, pady=(10, 0))
 
         # Bind Enter key to first command, Escape to close
         root.bind('<Return>', lambda e: self._do_launch(root, self.COMMANDS[0], directory_var, powershell_var))
-        root.bind('<Escape>', lambda e: root.destroy())
+        root.bind('<Escape>', lambda e: self._request_close())
+
+        # Store reference for update check
+        with self._window_lock:
+            self._current_window = root
+            self._pending_show = False
 
         # Focus
         dir_entry.focus()
+        dir_entry.select_range(0, tk.END)
 
         # Run the window (blocks until closed)
-        root.mainloop()
+        try:
+            root.mainloop()
+        finally:
+            # Cleanup
+            with self._window_lock:
+                self._current_window = None
+                self._pending_show = False
+
+    def _check_pending_updates(self, root: tk.Tk, directory_var: tk.StringVar):
+        """Check for pending directory updates (called periodically)."""
+        with self._window_lock:
+            if self._pending_show and self._pending_directory:
+                directory_var.set(self._pending_directory)
+                self._pending_show = False
+                root.lift()
+                root.focus_force()
+
+        # Schedule next check
+        root.after(100, lambda: self._check_pending_updates(root, directory_var))
 
     def _do_launch(self, root: tk.Tk, command: str, directory_var: tk.StringVar, powershell_var: tk.BooleanVar):
         """
@@ -183,13 +217,32 @@ class LauncherGUI:
 
         use_powershell = powershell_var.get()
 
-        # Call the launch callback
-        if self._launch_callback:
-            self._launch_callback(directory, command, use_powershell)
+        # Close the window immediately
+        self._request_close()
 
-        # Close the window
-        root.destroy()
+        # Call the launch callback in a separate thread to avoid blocking
+        if self._launch_callback:
+            def run_callback():
+                try:
+                    self._launch_callback(directory, command, use_powershell)
+                except Exception as e:
+                    print(f"Error in launch callback: {e}")
+
+            threading.Thread(target=run_callback, daemon=True).start()
+
+    def _request_close(self):
+        """Request the window to close (thread-safe)."""
+        with self._window_lock:
+            if self._current_window:
+                # Schedule the close on the tkinter event loop
+                self._current_window.after(0, self._current_window.destroy)
 
     def destroy(self):
-        """Cleanup."""
-        self._running = False
+        """Cleanup and close any open window."""
+        self._request_close()
+        # Wait for the window thread to finish
+        if self._window_thread and self._window_thread.is_alive():
+            self._window_thread.join(timeout=2.0)
+
+
+__all__ = ["LauncherGUI"]

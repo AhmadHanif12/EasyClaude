@@ -15,6 +15,7 @@ from app.hotkey import HotkeyManager
 from app.tray import TrayManager
 from app.gui import LauncherGUI
 from app.launcher import ClaudeLauncher
+from app.single_instance import check_single_instance
 
 
 class EasyClaudeApp:
@@ -91,17 +92,24 @@ class EasyClaudeApp:
 
     def run(self):
         """Start the application - pystray runs in main thread."""
+        with self._lock:
+            self._running = True
+
         # Set up signal handlers
         signal.signal(signal.SIGINT, self._signal_handler)
         signal.signal(signal.SIGTERM, self._signal_handler)
 
         print("EasyClaude is starting...")
         print(f"Hotkey: {self.config.hotkey}")
-        print("Press Ctrl+C to exit.")
+        print("Press Ctrl+C or use the tray menu to exit.")
 
         # Start the tray icon - this blocks in the main thread
         # pystray will handle the event loop
         self.tray_manager.start(title="EasyClaude - Press Ctrl+Alt+C to launch")
+
+        # After tray stops, mark as not running
+        with self._lock:
+            self._running = False
 
     def shutdown(self):
         """Shutdown the application gracefully."""
@@ -126,6 +134,10 @@ class EasyClaudeApp:
 
 def main():
     """Main entry point for EasyClaude."""
+    # Check if another instance is already running
+    if not check_single_instance():
+        sys.exit(1)
+
     app = EasyClaudeApp()
     app.run()
 
