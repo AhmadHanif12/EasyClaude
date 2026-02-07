@@ -8,6 +8,8 @@ from any directory via global hotkey.
 import sys
 import os
 import signal
+import threading
+import time
 from app.config import load_config, update_config, get_config
 from app.hotkey import HotkeyManager
 from app.tray import TrayManager
@@ -30,8 +32,12 @@ class EasyClaudeApp:
         # Initialize components
         self.launcher = ClaudeLauncher()
         self.hotkey_manager = HotkeyManager(self.config.hotkey)
-        self.tray_manager = TrayManager()
         self.gui = LauncherGUI(self._on_launch)
+        self._running = False
+        self._lock = threading.Lock()
+
+        # Create tray icon (but don't start yet)
+        self.tray_manager = TrayManager()
 
         # Set up tray callbacks
         self.tray_manager.set_callbacks(
@@ -41,10 +47,6 @@ class EasyClaudeApp:
 
         # Register hotkey
         self.hotkey_manager.register(self.show_gui)
-
-        # Set up signal handlers for graceful shutdown
-        signal.signal(signal.SIGINT, self._signal_handler)
-        signal.signal(signal.SIGTERM, self._signal_handler)
 
     def _on_launch(self, directory: str, command: str, use_powershell: bool):
         """
@@ -76,42 +78,38 @@ class EasyClaudeApp:
         self.gui.show(initial_directory=self.config.last_directory)
 
     def _show_config_info(self):
-        """Show configuration information (placeholder)."""
+        """Show configuration information."""
         print(f"EasyClaude Configuration:")
         print(f"  Hotkey: {self.config.hotkey}")
         print(f"  Last directory: {self.config.last_directory}")
         print(f"  Last command: {self.config.last_command}")
 
     def _signal_handler(self, signum, frame):
-        """
-        Handle shutdown signals for graceful exit.
-
-        Args:
-            signum: Signal number
-            frame: Current stack frame
-        """
+        """Handle shutdown signals."""
         self.shutdown()
         sys.exit(0)
 
     def run(self):
-        """Start the application main loop."""
-        # Start tray icon
-        self.tray_manager.start(title="EasyClaude - Press Ctrl+Alt+C to launch")
+        """Start the application - pystray runs in main thread."""
+        # Set up signal handlers
+        signal.signal(signal.SIGINT, self._signal_handler)
+        signal.signal(signal.SIGTERM, self._signal_handler)
 
-        print("EasyClaude is running in the system tray.")
-        print(f"Press {self.config.hotkey} to open the launcher, or use the tray menu.")
+        print("EasyClaude is starting...")
+        print(f"Hotkey: {self.config.hotkey}")
         print("Press Ctrl+C to exit.")
 
-        # Keep the main thread alive
-        try:
-            import time
-            while True:
-                time.sleep(1)
-        except KeyboardInterrupt:
-            self.shutdown()
+        # Start the tray icon - this blocks in the main thread
+        # pystray will handle the event loop
+        self.tray_manager.start(title="EasyClaude - Press Ctrl+Alt+C to launch")
 
     def shutdown(self):
         """Shutdown the application gracefully."""
+        with self._lock:
+            if not self._running:
+                return
+            self._running = False
+
         print("Shutting down EasyClaude...")
 
         # Unregister hotkey

@@ -4,7 +4,6 @@ System tray management for EasyClaude.
 Uses pystray library for cross-platform system tray icon and menu.
 """
 
-import threading
 from typing import Callable, Optional
 from PIL import Image, ImageDraw
 import pystray
@@ -21,7 +20,6 @@ class TrayManager:
     def __init__(self):
         """Initialize the tray manager."""
         self._icon: Optional[pystray.Icon] = None
-        self._thread: Optional[threading.Thread] = None
         self._running = False
         self._launch_callback: Optional[Callable[[], None]] = None
         self._config_callback: Optional[Callable[[], None]] = None
@@ -95,7 +93,7 @@ class TrayManager:
 
     def start(self, title: str = "EasyClaude") -> bool:
         """
-        Start the system tray icon.
+        Start the system tray icon (blocking - runs in main thread).
 
         Args:
             title: Tooltip/title for the tray icon
@@ -121,13 +119,9 @@ class TrayManager:
             menu=menu
         )
 
-        # Run in separate thread
+        # Run the icon (this blocks in the main thread)
         self._running = True
-        self._thread = threading.Thread(
-            target=self._icon.run,
-            daemon=True
-        )
-        self._thread.start()
+        self._icon.run()
 
         return True
 
@@ -137,10 +131,6 @@ class TrayManager:
             self._icon.stop()
             self._running = False
 
-        if self._thread:
-            self._thread.join(timeout=2)
-            self._thread = None
-
     def is_running(self) -> bool:
         """
         Check if tray icon is running.
@@ -148,6 +138,7 @@ class TrayManager:
         Returns:
             bool: True if running
         """
+        return self._running
         return self._running
 
     def update_title(self, title: str) -> None:
