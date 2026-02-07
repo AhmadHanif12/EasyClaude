@@ -63,3 +63,13 @@ config.json
 # Test artifacts
 .pytest_cache/
 .cache/
+
+# Windows device names (reserved)
+nul
+CON
+PRN
+AUX
+CLOCK$
+NUL
+COM*
+LPT*

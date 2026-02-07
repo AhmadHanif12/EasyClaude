@@ -5,7 +5,10 @@ Wraps the platform-specific terminal launcher for EasyClaude.
 """
 
 from typing import Optional
-from app.platform import get_platform_launcher
+import logging
+from app.platform import get_platform_launcher, LaunchFailedError, TerminalNotFoundError
+
+logger = logging.getLogger(__name__)
 
 
 class ClaudeLauncher:
@@ -31,20 +34,28 @@ class ClaudeLauncher:
         Args:
             directory: Working directory for Claude
             command: Command to execute (default: "claude")
-            use_powershell: Force PowerShell on Windows (None for auto)
+            use_powershell: Force PowerShell on Windows (ignored - platform default)
 
         Returns:
             bool: True if launch was successful, False otherwise
         """
         if not directory:
-            print("Error: No directory specified")
+            logger.error("No directory specified")
             return False
 
-        return self._platform_launcher.launch_claude(
-            directory=directory,
-            command=command,
-            use_powershell=use_powershell,
-        )
+        try:
+            # Platform launcher uses its own terminal defaults
+            self._platform_launcher.launch_claude(
+                directory=directory,
+                command=command
+            )
+            return True
+        except (TerminalNotFoundError, LaunchFailedError) as e:
+            logger.error(f"Failed to launch Claude: {e}")
+            return False
+        except Exception as e:
+            logger.error(f"Unexpected error launching Claude: {e}")
+            return False
 
     def is_available(self) -> bool:
         """

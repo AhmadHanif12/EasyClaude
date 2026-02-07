@@ -8,6 +8,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from typing import Callable, Optional
 import os
+import threading
 from pathlib import Path
 
 
@@ -21,6 +22,7 @@ class LauncherGUI:
     - Directory picker + text entry
     - Command selection buttons
     - PowerShell checkbox
+    - Thread-safe GUI operations
     """
 
     # Available commands
@@ -42,6 +44,9 @@ class LauncherGUI:
         self._directory_var: Optional[tk.StringVar] = None
         self._powershell_var: Optional[tk.BooleanVar] = None
         self._selected_command: Optional[str] = None
+        self._lock = threading.Lock()
+        self._pending_show = None
+        self._initial_directory = ""
 
     def _create_widgets(self):
         """Create all GUI widgets."""
@@ -168,14 +173,34 @@ class LauncherGUI:
         """
         Show the launcher window.
 
+        Thread-safe: Can be called from any thread.
+
         Args:
             initial_directory: Initial directory to display
         """
+        with self._lock:
+            self._pending_show = initial_directory or self._initial_directory
+
         if self._root is None:
             self._create_window()
+            # Start the tkinter event loop in a separate thread
+            self._start_event_loop()
+
+        # Schedule the show operation on the main thread
+        if self._root:
+            self._root.after(0, self._show_on_main_thread)
+
+    def _show_on_main_thread(self):
+        """Show the window - must be called from the main tkinter thread."""
+        with self._lock:
+            initial_directory = self._pending_show
+            self._pending_show = None
 
         if initial_directory:
             self._directory_var.set(initial_directory)
+
+        # Make sure window is visible (deiconify in case it was withdrawn)
+        self._root.deiconify()
 
         # Center window on screen
         self._center_window()
@@ -183,13 +208,26 @@ class LauncherGUI:
         # Bring to front and focus
         self._root.lift()
         self._root.attributes('-topmost', True)
-        self._root.after_idle(self._root.attributes, '-topmost', False)
+        self._root.after_idle(lambda: self._root.attributes('-topmost', False))
         self._root.focus_force()
 
+    def _start_event_loop(self):
+        """Start the tkinter event loop in a separate thread."""
+        def run_loop():
+            try:
+                self._root.mainloop()
+            except Exception as e:
+                # Log error but don't crash
+                pass
+
+        thread = threading.Thread(target=run_loop, daemon=True)
+        thread.start()
+
     def hide(self):
-        """Hide the launcher window."""
+        """Hide the launcher window (thread-safe)."""
         if self._root:
-            self._root.withdraw()
+            # Schedule hide on main thread
+            self._root.after(0, self._root.withdraw)
 
     def _create_window(self):
         """Create the main window."""
