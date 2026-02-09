@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=EasyClaude
+Comment=Launch Claude Code from any directory
+Exec=easyclaude
+Icon=easyclaude
+Terminal=false
+Categories=Development;Utility;
+Keywords=Claude;AI;Terminal;

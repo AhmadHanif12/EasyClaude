@@ -169,7 +169,8 @@ def create_launcher() -> TerminalLauncher:
 
     if system == "Windows":
         from app.platform.windows import WindowsTerminalLauncher
-        return WindowsTerminalLauncher()
+        # Always use PowerShell console directly (not Windows Terminal)
+        return WindowsTerminalLauncher(prefer_windows_terminal=False)
     elif system == "Linux":
         from app.platform.linux import LinuxTerminalLauncher
         return LinuxTerminalLauncher()

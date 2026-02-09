@@ -1,0 +1,12 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=EasyClaude
+Comment=Launch Claude Code from any directory
+Exec=easyclaude --hidden
+Icon=easyclaude
+Terminal=false
+Categories=Development;Utility;
+Keywords=Claude;AI;Terminal;
+X-GNOME-Autostart-enabled=true
+X-KDE-autostart-after=panel

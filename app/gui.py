@@ -62,6 +62,9 @@ class LauncherGUI:
             self._root.resizable(False, False)
             self._root.withdraw()
             self._root.attributes("-topmost", True)
+            
+            # Set window icon
+            self._set_window_icon()
 
             self._configure_styles()
             self._build_layout()
@@ -75,6 +78,46 @@ class LauncherGUI:
 
             self._process_command_queue()
             self._initialized = True
+
+    def _set_window_icon(self) -> None:
+        """Set the window icon from assets."""
+        if not self._root:
+            return
+        
+        import sys
+        
+        # Try to find the icon file
+        icon_paths = [
+            # When running from source
+            os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets", "icon.ico"),
+            # When running from PyInstaller bundle
+            os.path.join(getattr(sys, '_MEIPASS', ''), "assets", "icon.ico"),
+            # Relative to current directory
+            os.path.join("assets", "icon.ico"),
+            # PNG fallback paths
+            os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets", "icon.png"),
+            os.path.join(getattr(sys, '_MEIPASS', ''), "assets", "icon.png"),
+            os.path.join("assets", "icon.png"),
+        ]
+        
+        for icon_path in icon_paths:
+            if os.path.exists(icon_path):
+                try:
+                    if icon_path.endswith('.ico'):
+                        self._root.iconbitmap(icon_path)
+                    else:
+                        # Use PhotoImage for PNG
+                        icon_image = tk.PhotoImage(file=icon_path)
+                        self._root.iconphoto(True, icon_image)
+                        # Keep reference to prevent garbage collection
+                        self._icon_image = icon_image
+                    logger.debug(f"Window icon set from: {icon_path}")
+                    return
+                except Exception as e:
+                    logger.debug(f"Failed to set icon from {icon_path}: {e}")
+                    continue
+        
+        logger.debug("No icon file found, using default")
 
     def _configure_styles(self) -> None:
         """Set consistent compact styling for controls."""

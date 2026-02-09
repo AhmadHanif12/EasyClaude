@@ -10,7 +10,7 @@ import os
 import signal
 import threading
 import time
-from app.config import load_config, update_config, get_config
+from app.config import update_config, get_config
 from app.hotkey import HotkeyManager
 from app.tray import TrayManager
 from app.gui import LauncherGUI
@@ -49,13 +49,21 @@ class EasyClaudeApp:
         logger.info(f"EasyClaude starting. Log file: {log_file}")
 
         # Load configuration
-        self.config = load_config()
+        self.config = get_config()
         logger.info(f"Configuration loaded. Hotkey: {self.config.hotkey}")
 
-        # Initialize components
+        # Initialize launcher first
         self.launcher = ClaudeLauncher()
-        self.hotkey_manager = HotkeyManager(self.config.hotkey)
+        
+        # Initialize GUI and pre-create it on the main thread
+        # This prevents issues when showing from hotkey callback thread
         self.gui = LauncherGUI(self._on_launch)
+        self.gui._ensure_initialized()  # Pre-initialize GUI
+        logger.debug("GUI pre-initialized on main thread")
+        
+        # Initialize hotkey manager
+        self.hotkey_manager = HotkeyManager(self.config.hotkey)
+        
         self._running = False
         self._lock = threading.Lock()
 
@@ -72,14 +80,13 @@ class EasyClaudeApp:
         self.hotkey_manager.register(self.show_gui)
         logger.info("Application initialized successfully")
 
-    def _on_launch(self, directory: str, command: str, use_powershell: bool):
+    def _on_launch(self, directory: str, command: str):
         """
         Handle launch request from GUI.
 
         Args:
             directory: Working directory
             command: Command to execute
-            use_powershell: Whether to use PowerShell
         """
         import logging
         logger = logging.getLogger(__name__)
@@ -89,13 +96,13 @@ class EasyClaudeApp:
             last_directory=directory,
             last_command=command,
         )
-        logger.info(f"Launch requested: directory='{directory}', command='{command}', use_powershell={use_powershell}")
+        self.config = get_config()
+        logger.info(f"Launch requested: directory='{directory}', command='{command}'")
 
-        # Launch Claude
+        # Launch Claude (always uses PowerShell)
         success = self.launcher.launch(
             directory=directory,
-            command=command,
-            use_powershell=use_powershell
+            command=command
         )
 
         if not success:
@@ -103,7 +110,10 @@ class EasyClaudeApp:
 
     def show_gui(self):
         """Show the launcher GUI with last used directory."""
-        self.gui.show(initial_directory=self.config.last_directory)
+        self.config = get_config()
+        self.gui.show(
+            initial_directory=self.config.last_directory,
+        )
 
     def _show_config_info(self):
         """Show configuration information."""
@@ -120,7 +130,7 @@ class EasyClaudeApp:
         sys.exit(0)
 
     def run(self):
-        """Start the application - pystray runs in main thread."""
+        """Start the application - pystray runs in background thread."""
         import logging
         logger = logging.getLogger(__name__)
 
@@ -135,13 +145,41 @@ class EasyClaudeApp:
         logger.info(f"Hotkey: {self.config.hotkey}")
         logger.info("Press Ctrl+C or use the tray menu to exit.")
 
-        # Start the tray icon - this blocks in the main thread
-        # pystray will handle the event loop
-        self.tray_manager.start(title="EasyClaude - Press Ctrl+Alt+C to launch")
+        # Start pystray in a background thread so main thread can handle tkinter properly
+        import threading
+        tray_thread = threading.Thread(
+            target=self._run_tray_in_thread,
+            name="TrayIconThread",
+            daemon=False  # Don't use daemon so tray can exit cleanly
+        )
+        tray_thread.start()
 
-        # After tray stops, mark as not running
-        with self._lock:
-            self._running = False
+        # Keep main thread alive with a simple event loop
+        # This allows tkinter operations to work properly
+        # Also periodically update tkinter to process pending events
+        try:
+            while self._running:
+                self.gui.update()  # Process tkinter events
+                time.sleep(0.05)  # 20 FPS for event processing
+        except KeyboardInterrupt:
+            logger.info("Keyboard interrupt received")
+        finally:
+            self.shutdown()
+
+        # Wait for tray thread to finish
+        tray_thread.join(timeout=2.0)
+
+    def _run_tray_in_thread(self):
+        """Run the tray icon in a background thread."""
+        import logging
+        logger = logging.getLogger(__name__)
+        try:
+            self.tray_manager.start(title="EasyClaude - Press Ctrl+Alt+C to launch")
+        except Exception as e:
+            logger.error(f"Tray icon error: {e}")
+        finally:
+            with self._lock:
+                self._running = False
 
     def shutdown(self):
         """Shutdown the application gracefully."""
@@ -155,10 +193,10 @@ class EasyClaudeApp:
 
         logger.info("Shutting down EasyClaude...")
 
-        # Unregister hotkey
+        # Unregister hotkey first
         self.hotkey_manager.unregister()
 
-        # Stop tray icon
+        # Stop tray icon (this will exit the tray thread)
         self.tray_manager.stop()
 
         # Destroy GUI

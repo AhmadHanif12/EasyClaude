@@ -29,35 +29,52 @@ class TrayManager:
 
     def _create_icon(self, size: int = 64) -> Image.Image:
         """
-        Create a simple icon for the system tray.
+        Load the icon for the system tray.
 
         Args:
-            size: Icon size in pixels
+            size: Icon size in pixels (used for fallback only)
 
         Returns:
             PIL.Image: Icon image
         """
-        # Create a square image with transparent background
+        import sys
+        import os
+        
+        # Try to find the icon file
+        icon_paths = [
+            # When running from source
+            os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets", "icon.png"),
+            # When running from PyInstaller bundle
+            os.path.join(getattr(sys, '_MEIPASS', ''), "assets", "icon.png"),
+            # Relative to current directory
+            os.path.join("assets", "icon.png"),
+        ]
+        
+        for icon_path in icon_paths:
+            if os.path.exists(icon_path):
+                try:
+                    # Open and immediately load+copy the image to release file handle
+                    with Image.open(icon_path) as img:
+                        # Load the image data into memory
+                        img.load()
+                        # Create a copy that doesn't hold a file reference
+                        image = img.copy()
+                    # Resize to appropriate size for system tray
+                    image = image.resize((size, size), Image.Resampling.LANCZOS)
+                    return image.convert("RGBA")
+                except Exception:
+                    pass
+        
+        # Fallback: Create a simple icon if file not found
         image = Image.new("RGBA", (size, size), (0, 0, 0, 0))
         draw = ImageDraw.Draw(image)
-
-        # Draw a simple "C" for Claude
         padding = size // 8
         draw.ellipse(
             [padding, padding, size - padding, size - padding],
-            fill=(100, 150, 255, 255),  # Light blue
-            outline=(50, 100, 200, 255),  # Darker blue outline
+            fill=(255, 100, 50, 255),  # Orange to match new icon
+            outline=(200, 80, 40, 255),
             width=max(1, size // 16)
         )
-
-        # Draw the "C" opening
-        opening_width = size // 4
-        draw.rectangle(
-            [size // 2 - opening_width // 2, padding,
-             size // 2 + opening_width // 2, size - padding],
-            fill=(0, 0, 0, 0)  # Transparent (clear)
-        )
-
         return image
 
     def _on_launch(self) -> None:
@@ -126,10 +143,12 @@ class TrayManager:
         return True
 
     def stop(self) -> None:
-        """Stop the system tray icon."""
+        """Stop the system tray icon - thread-safe."""
         if self._icon and self._running:
-            self._icon.stop()
             self._running = False
+            # Use pystray's stop method which is thread-safe
+            # It sends a message to the icon's message loop
+            self._icon.stop()
 
     def is_running(self) -> bool:
         """

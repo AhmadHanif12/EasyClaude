@@ -1,9 +1,9 @@
 # EasyClaude
 
-> A Windows system tray application for launching Claude Code from any directory via global hotkey.
+> A cross-platform system tray application for launching Claude Code from any directory via global hotkey.
 
 ![Python](https://img.shields.io/badge/Python-3.10%2B-blue)
-![Platform](https://img.shields.io/badge/Platform-Windows-lightgrey)
+![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux-lightgrey)
 ![License](https://img.shields.io/badge/License-MIT-green)
 
 ## Overview
@@ -13,20 +13,38 @@ EasyClaude runs silently in your system tray, ready to launch Claude Code in any
 ## Features
 
 - **Global Hotkey**: Press `Ctrl+Alt+C` to instantly open the launcher
+- **Cross-Platform**: Support for Windows and Linux
 - **Directory Selection**: Native folder picker or manual path entry
 - **Quick Commands**: One-click access to common Claude commands
-- **PowerShell Support**: Optional PowerShell for Claude execution
 - **Configuration Persistence**: Remembers your last directory and preferences
 - **Always-On-Top**: Launcher GUI appears above other windows
 - **System Tray**: Minimal presence with easy access to all features
+- **Terminal Detection**: Automatically detects and uses your preferred terminal
 
 ## Quick Start
 
-### Installation
+### Prerequisites
 
-#### Option 1: From Source
+1. **Python 3.10 or higher** installed
+2. **Claude Code CLI** installed and in your PATH:
 
 ```bash
+npm install -g @anthropic-ai/claude-code
+```
+
+Verify installation: `claude --version`
+
+### Installation
+
+#### Windows
+
+**Option 1: Executable (Recommended)**
+
+Download `EasyClaude.exe` from the [Releases](https://github.com/AhmadHanif12/EasyClaude/releases) page and run it.
+
+**Option 2: From Source**
+
+```powershell
 git clone https://github.com/AhmadHanif12/EasyClaude.git
 cd EasyClaude
 python -m venv venv
@@ -35,9 +53,35 @@ pip install -r requirements.txt
 python -m app.main
 ```
 
-#### Option 2: Executable
+#### Linux
 
-Download `EasyClaude.exe` from the [Releases](https://github.com/AhmadHanif12/EasyClaude/releases) page and run it.
+**Option 1: From PyPI (Recommended)**
+
+```bash
+pip install easyclaude[linux]
+easyclaude
+```
+
+**Option 2: From Source**
+
+```bash
+git clone https://github.com/AhmadHanif12/EasyClaude.git
+cd EasyClaude
+python -m venv venv
+source venv/bin/activate
+pip install -e ".[linux]"
+python -m app.main
+```
+
+**Linux Dependencies**
+
+EasyClaude requires the following system packages on Linux:
+
+- Debian/Ubuntu: `sudo apt install python3-cairo python3-xlib libgirepository1.0-dev`
+- Fedora: `sudo dnf install python3-cairo python3-xlib gobject-introspection-devel`
+- Arch: `sudo pacman -S python-cairo python-xlib gobject-introspection`
+
+For system tray integration on GNOME, install the [AppIndicator Extension](https://extensions.gnome.org/extension/615/appindicator-kstatusnotifier-item/).
 
 ### First Run
 
@@ -59,8 +103,7 @@ Download `EasyClaude.exe` from the [Releases](https://github.com/AhmadHanif12/Ea
    - **claude** - Standard launch
    - **claude --continue** - Continue last session
    - **claude --dangerously-skip-permissions** - Skip permission prompts
-5. Optionally check "Always use PowerShell"
-6. Claude opens in a new terminal window
+5. Claude opens in a new terminal window
 
 #### Tray Menu
 
@@ -71,12 +114,14 @@ Right-click the tray icon for:
 
 ## Configuration
 
-Configuration is stored at `~/.easyclaude/config.json`:
+Configuration is stored at:
+- **Windows**: `C:\Users\YourName\.easyclaude\config.json`
+- **Linux**: `~/.easyclaude/config.json`
 
 ```json
 {
   "hotkey": "ctrl+alt+c",
-  "last_directory": "C:\Users\YourName\Projects",
+  "last_directory": "/home/user/projects",
   "last_command": "claude",
   "always_use_powershell": false,
   "window_position": "center"
@@ -89,24 +134,74 @@ Edit the `hotkey` field in `config.json`. Supported formats:
 
 - `ctrl+alt+c` - Ctrl + Alt + C
 - `ctrl+shift+z` - Ctrl + Shift + Z
-- `win+e` - Windows Key + E
+- `win+e` - Windows/Super Key + E
 - `alt+f4` - Alt + F4
 
 Modifiers: `ctrl`, `alt`, `shift`, `win`, `cmd`
 
-## Requirements
+## Platform-Specific Information
 
-- Python 3.10 or higher
-- Windows 10/11 (primary target)
-- Claude Code CLI installed and in PATH
+### Windows
 
-### Installing Claude Code
+- **Terminals**: PowerShell, CMD, Windows Terminal
+- **Autostart**: Add shortcut to `shell:startup` folder
+- **Tray Icon**: Native Windows system tray
+
+### Linux
+
+**Supported Desktop Environments:**
+- GNOME (with AppIndicator extension)
+- KDE Plasma
+- XFCE
+- MATE
+- LXDE/LXQt
+- Cinnamon
+
+**Supported Terminals:**
+- gnome-terminal
+- konsole
+- xfce4-terminal
+- mate-terminal
+- lxterminal
+- kitty
+- alacritty
+- xterm (fallback)
+
+**Autostart on Linux:**
+
+To enable autostart, copy the desktop file:
 
 ```bash
-npm install -g @anthropic-ai/claude-code
+mkdir -p ~/.config/autostart
+cp assets/easyclaude-autostart.desktop ~/.config/autostart/
 ```
 
-See [Claude Code Documentation](https://docs.anthropic.com/en/docs/claude-code) for details.
+Or enable it through your desktop environment's autostart settings.
+
+**Known Limitations:**
+
+- **Wayland**: Global hotkeys may not work due to Wayland's security model. Consider using X11 or a DBus-based hotkey daemon.
+- **GNOME 40+**: The system tray is hidden by default. Install the AppIndicator extension to see the tray icon.
+
+## Building from Source
+
+### Windows
+
+```bash
+pip install pyinstaller
+pyinstaller easyclaude.spec
+```
+
+The executable will be in `dist/EasyClaude.exe`.
+
+### Linux
+
+```bash
+pip install pyinstaller
+pyinstaller easyclaude_linux.spec
+```
+
+The executable will be in `dist/EasyClaude`.
 
 ## Development
 
@@ -122,20 +217,23 @@ EasyClaude/
 │   ├── tray.py           # System tray (pystray)
 │   ├── gui.py            # Launcher GUI (tkinter)
 │   ├── launcher.py       # Claude execution wrapper
+│   ├── single_instance.py # Single-process enforcement
 │   └── platform/         # Platform abstraction
 │       ├── __init__.py
 │       ├── windows.py    # Windows implementation
-│       ├── linux.py      # Linux stub (Phase 2)
-│       └── macos.py      # macOS stub (Phase 2)
+│       ├── linux.py      # Linux implementation
+│       └── macos.py      # macOS stub (future)
 ├── tests/
 │   ├── test_config.py
 │   ├── test_hotkey.py
 │   └── test_launcher.py
 ├── assets/
-│   └── icon.ico
-├── build/
-│   └── build.spec        # PyInstaller spec
-├── CLAUDE.md
+│   ├── icon.ico          # Windows icon
+│   ├── icon.png          # Linux icon
+│   ├── easyclaude.desktop        # Linux app launcher
+│   └── easyclaude-autostart.desktop  # Linux autostart
+├── easyclaude.spec       # Windows PyInstaller spec
+├── easyclaude_linux.spec # Linux PyInstaller spec
 ├── README.md
 ├── requirements.txt
 └── pyproject.toml
@@ -147,21 +245,11 @@ EasyClaude/
 pytest tests/ -v
 ```
 
-### Building Executable
+### Running with Coverage
 
 ```bash
-pyinstaller build/build.spec
+pytest tests/ -v --cov=app --cov-report=term-missing
 ```
-
-The executable will be in `dist/EasyClaude.exe`.
-
-### Creating an Autostart Shortcut
-
-To start EasyClaude automatically on Windows login:
-
-1. Press `Win + R`, type `shell:startup`, and press Enter
-2. Create a shortcut to `EasyClaude.exe` in the Startup folder
-3. EasyClaude will now start automatically when you log in
 
 ## Troubleshooting
 
@@ -170,6 +258,7 @@ To start EasyClaude automatically on Windows login:
 - Check if another application is using the same hotkey
 - Verify `config.json` has a valid hotkey format
 - Restart EasyClaude after changing configuration
+- **Linux/Wayland**: Global hotkeys may not work; consider using X11
 
 ### Claude Not Found
 
@@ -177,39 +266,44 @@ To start EasyClaude automatically on Windows login:
 - Check that Claude is in your system PATH
 - Try launching Claude manually first to verify installation
 
-### PowerShell Issues
-
-- Ensure PowerShell is available: `powershell.exe -Version`
-- Check execution policy: `Get-ExecutionPolicy`
-- If restricted, consider using CMD instead
-
 ### Terminal Window Closes Immediately
 
 - Check Claude's error output for issues
 - Verify directory path is valid
 - Ensure directory has proper permissions
 
+### Linux: Tray Icon Not Visible
+
+- **GNOME**: Install the AppIndicator extension
+- Check that pycairo and python-xlib are installed
+- Verify EasyClaude is running: `ps aux | grep easyclaude`
+
+### Linux: Hotkey Not Working on Wayland
+
+- Wayland's security model prevents global hotkey listening
+- Consider using X11 session instead
+- Or use a DBus-based hotkey daemon
+
 ## Roadmap
 
-### Phase 1: Windows (Current)
-- [x] System tray integration
-- [x] Global hotkey support
+### Phase 1: Core Features (Current)
+- [x] Windows system tray integration
+- [x] Windows global hotkey support
+- [x] Linux terminal launcher
+- [x] Linux desktop integration
 - [x] GUI launcher
 - [x] Configuration persistence
-- [x] PowerShell support
-- [ ] Windows autostart installer
+
+### Phase 2: Enhanced Features
+- [ ] Cross-platform autostart management
 - [ ] Settings GUI
-
-### Phase 2: Cross-Platform
-- [ ] Linux terminal support
-- [ ] macOS Terminal.app support
-- [ ] Platform-specific packaging
-
-### Phase 3: Enhanced Features
 - [ ] Recent directories quick-list
 - [ ] Custom command templates
 - [ ] Multiple Claude sessions
-- [ ] Integration with Claude's project management
+
+### Phase 3: Future Platforms
+- [ ] macOS Terminal.app support
+- [ ] AppImage/Flatpak distributions
 
 ## Contributing
 
@@ -221,9 +315,20 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 4. Push to the branch (`git push origin feature/AmazingFeature`)
 5. Open a Pull Request
 
+### Development Setup
+
+```bash
+git clone https://github.com/AhmadHanif12/EasyClaude.git
+cd EasyClaude
+python -m venv venv
+source venv/bin/activate  # or venv\Scripts\activate on Windows
+pip install -e ".[dev]"
+pre-commit install
+```
+
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ## Acknowledgments
 

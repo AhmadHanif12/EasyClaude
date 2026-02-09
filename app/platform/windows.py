@@ -34,16 +34,41 @@ class WindowsTerminalLauncher(TerminalLauncher):
         """Initialize the Windows terminal launcher."""
         self.prefer_windows_terminal = prefer_windows_terminal
         self._has_wt: Optional[bool] = None
+        self._wt_exe: Optional[str] = None
         self._powershell_exe: Optional[str] = None
         self._detect_environment()
 
     def _detect_environment(self) -> None:
         """Detect the Windows environment and available terminals."""
-        self._has_wt = shutil.which(self.WT_EXE) is not None
+        # First, try to find the actual Windows Terminal executable
+        # The WindowsApps wt.exe is a 0-byte shim that doesn't work with subprocess
+        import glob
+        wt_actual = None
+        
+        # Check Program Files WindowsApps for the real executable
+        program_files_apps = r'C:\Program Files\WindowsApps'
+        try:
+            pattern = os.path.join(program_files_apps, 'Microsoft.WindowsTerminal_*', 'wt.exe')
+            matches = glob.glob(pattern)
+            if matches:
+                # Use the first (latest) match
+                wt_actual = matches[0]
+                logger.debug(f"Found Windows Terminal executable: {wt_actual}")
+        except Exception:
+            pass
+        
+        # Fallback to shutil.which which finds the WindowsApps shim
+        if not wt_actual:
+            wt_actual = shutil.which(self.WT_EXE)
+        
+        self._has_wt = wt_actual is not None
         if self._has_wt:
-            logger.debug("Windows Terminal detected")
+            # Store the actual path to wt.exe
+            self._wt_exe = wt_actual
+            logger.debug(f"Windows Terminal detected: {self._wt_exe}")
         else:
             logger.debug("Windows Terminal not found, will use legacy console")
+        
         if shutil.which(self.POWERSHELL_EXE):
             self._powershell_exe = self.POWERSHELL_EXE
             logger.debug(f"Using PowerShell: {self._powershell_exe}")
@@ -74,7 +99,7 @@ class WindowsTerminalLauncher(TerminalLauncher):
 
         Uses proper escaping to prevent command injection.
         Directory is escaped using PowerShell's escape character and wrapped in quotes.
-        Command is validated to prevent injection.
+        Command is validated and escaped to prevent injection.
 
         Args:
             directory: The validated directory path
@@ -87,9 +112,14 @@ class WindowsTerminalLauncher(TerminalLauncher):
         # PowerShell uses backtick ` as escape character
         escaped_dir = directory.replace('`', '``').replace('"', '`"')
 
+        # Escape the command to prevent injection
+        # Only allow safe characters in the command arguments
+        # Escape any backticks, quotes, and special PowerShell characters
+        escaped_cmd = command.replace('`', '``').replace('"', '`"').replace('$', '`$').replace("'", "''")
+
         # Build command with Set-Location (safer than cd)
         # Using single quotes around path to prevent variable expansion
-        ps_command = f"Set-Location -LiteralPath '{escaped_dir}'; {command}"
+        ps_command = f"Set-Location -LiteralPath '{escaped_dir}'; {escaped_cmd}"
 
         return ps_command
 
@@ -98,7 +128,7 @@ class WindowsTerminalLauncher(TerminalLauncher):
         if not self.is_available():
             raise TerminalNotFoundError("PowerShell is not available on this system. Please install PowerShell to use EasyClaude.")
         try:
-            use_wt = self.prefer_windows_terminal and self._has_wt
+            use_wt = self.prefer_windows_terminal and self._has_wt and self._wt_exe
             terminal_type = "Windows Terminal" if use_wt else "PowerShell console"
             
             # Build the PowerShell command
@@ -108,9 +138,9 @@ class WindowsTerminalLauncher(TerminalLauncher):
             
             if use_wt:
                 # Windows Terminal requires special handling
-                # Use the wt.exe command-line syntax properly
+                # Use the actual wt.exe path (not the WindowsApps shim)
                 cmd = [
-                    self.WT_EXE,
+                    self._wt_exe,  # type: ignore
                     self._powershell_exe,
                     "-NoExit",
                     "-Command",
@@ -119,7 +149,7 @@ class WindowsTerminalLauncher(TerminalLauncher):
             else:
                 # Standard PowerShell console
                 cmd = [
-                    self._powershell_exe,
+                    self._powershell_exe,  # type: ignore
                     "-NoExit",
                     "-Command",
                     ps_command
@@ -128,10 +158,10 @@ class WindowsTerminalLauncher(TerminalLauncher):
             logger.info(f"Launching Claude in {terminal_type}: {directory}")
             logger.debug(f"Command: {' '.join(cmd)}")
             
-            # For wt.exe, we need to use shell=True or launch it differently
+            # For wt.exe, use proper Windows Terminal syntax
             if use_wt:
-                # Windows Terminal needs to be launched through the shell
-                subprocess.Popen(cmd, shell=True)
+                # Windows Terminal command line: wt.exe powershell.exe -NoExit -Command "..."
+                subprocess.Popen(cmd, shell=False)
             else:
                 # PowerShell can be launched directly
                 CREATE_NEW_PROCESS_GROUP = 0x00000200

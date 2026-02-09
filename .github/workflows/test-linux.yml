@@ -1,0 +1,179 @@
+name: Linux Tests
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  workflow_dispatch:
+
+jobs:
+  test-linux-matrix:
+    name: Test Linux Py${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.10', '3.11', '3.12']
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Cache pip packages
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -e ".[dev]"
+        pip install pytest-xvfb  # For X virtual framebuffer
+
+    - name: Run Linux unit tests
+      run: |
+        pytest tests/platform/test_linux.py -v --cov=app/platform/linux --cov-report=xml
+
+    - name: Run Linux mock tests
+      run: |
+        pytest tests/platform/test_linux_desktop.py -v
+
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v4
+      with:
+        files: ./coverage.xml
+        flags: linux
+        name: codecov-linux-py${{ matrix.python-version }}
+
+  test-linux-integration:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11']
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -e ".[dev]"
+
+    - name: Run integration tests (non-Linux specific)
+      run: |
+        pytest tests/platform/test_linux_integration.py -v -k "not linux_only"
+
+  lint-linux:
+    name: Lint Linux Code
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install linting tools
+      run: |
+        pip install pylint mypy flake8
+
+    - name: Run pylint on Linux platform code
+      run: |
+        pylint app/platform/linux.py --exit-zero --output-format=colorized
+
+    - name: Run mypy on Linux platform code
+      run: |
+        mypy app/platform/linux.py --ignore-missing-imports --no-error-summary
+
+    - name: Run flake8 on Linux platform code
+      run: |
+        flake8 app/platform/linux.py --max-line-length=100 --extend-ignore=E203,W503
+
+  test-linux-distro:
+    name: Test on ${{ matrix.distro }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        container:
+          - ubuntu:22.04
+          - ubuntu:24.04
+          - debian:12
+
+    container:
+      image: ${{ matrix.container }}
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install system dependencies
+      run: |
+        apt-get update -y
+        apt-get install -y python3 python3-pip python3-dev
+        # Desktop environment dependencies for testing
+        apt-get install -y xvfb libxkbcommon-x11-0 libxcb-icccm4 libxcb-image0 \
+                          libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 \
+                          libxcb-xinerama0 libxcb-xfixes0 x11-apps
+
+    - name: Install Python dependencies
+      run: |
+        pip3 install --upgrade pip
+        pip3 install -e ".[dev]"
+
+    - name: Run tests with Xvfb
+      run: |
+        Xvfb :99 -screen 0 1024x768x24 > /dev/null 2>&1 &
+        export DISPLAY=:99
+        pytest tests/ -v -k "not skip_linux" --tb=short || true
+
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install security tools
+      run: |
+        pip install bandit safety
+
+    - name: Run Bandit security linter
+      run: |
+        bandit -r app/platform/ -f json -o bandit-report.json || true
+
+    - name: Check dependencies for vulnerabilities
+      run: |
+        safety check --json > safety-report.json || true
+
+    - name: Upload security reports
+      uses: actions/upload-artifact@v4
+      with:
+        name: security-reports
+        path: |
+          bandit-report.json
+          safety-report.json

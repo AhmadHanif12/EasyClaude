@@ -41,9 +41,11 @@ class HotkeyManager:
         self._listener: Optional[keyboard.Listener] = None
         self._hotkey_combination: Optional[tuple] = None
         self._pressed_keys = set()
+        self._pressed_key_tokens = set()
         self._lock = threading.Lock()
         self._active = False
         self._executor: Optional[ThreadPoolExecutor] = None
+        self._hotkey_latched = False
 
         # Parse the hotkey string
         self._parse_hotkey()
@@ -119,18 +121,21 @@ class HotkeyManager:
         """
         with self._lock:
             self._pressed_keys.add(key)
+            self._pressed_key_tokens.update(self._key_tokens(key))
+            logger.debug(f"Key pressed: {key}, pressed_keys: {self._pressed_keys}")
 
             # Check if hotkey combination is pressed
-            if self._hotkey_combination and self._callback:
-                if self._is_hotkey_pressed():
+            if self._hotkey_combination and self._callback and self._active:
+                if self._is_hotkey_pressed() and not self._hotkey_latched:
+                    self._hotkey_latched = True
+                    logger.info(f"Hotkey '{self._hotkey_string}' triggered!")
                     # Call callback in a separate thread to avoid blocking
-                    # Use executor with max_workers=1 to prevent unbounded thread creation
-                    if self._executor is None:
-                        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="hotkey_callback")
-
+                    # Executor is pre-initialized during register() for fast response
                     def safe_callback():
                         try:
+                            logger.debug("Executing hotkey callback...")
                             self._callback()
+                            logger.debug("Hotkey callback completed")
                         except Exception as e:
                             logger.error(f"Error in hotkey callback: {e}", exc_info=True)
 
@@ -145,10 +150,48 @@ class HotkeyManager:
         """
         with self._lock:
             self._pressed_keys.discard(key)
+            self._pressed_key_tokens.difference_update(self._key_tokens(key))
+            if not self._is_hotkey_pressed():
+                self._hotkey_latched = False
+
+    @staticmethod
+    def _key_tokens(key) -> set[str]:
+        """
+        Convert pynput keys into normalized tokens for robust matching.
+
+        pynput can emit character keys as either chars or virtual-key codes
+        depending on modifier state (e.g. Ctrl+Alt+C often appears as vk 67).
+        """
+        tokens = set()
+
+        # Normalize modifiers so left/right variants can match each other.
+        modifier_aliases = {
+            Key.ctrl: "ctrl", Key.ctrl_l: "ctrl", Key.ctrl_r: "ctrl",
+            Key.alt: "alt", Key.alt_l: "alt", Key.alt_r: "alt",
+            Key.shift: "shift", Key.shift_l: "shift", Key.shift_r: "shift",
+            Key.cmd: "cmd", Key.cmd_l: "cmd", Key.cmd_r: "cmd",
+        }
+        if key in modifier_aliases:
+            tokens.add(f"mod:{modifier_aliases[key]}")
+            return tokens
+
+        if isinstance(key, KeyCode):
+            if getattr(key, "vk", None) is not None:
+                tokens.add(f"vk:{int(key.vk)}")
+            if getattr(key, "char", None):
+                ch = key.char.lower()
+                tokens.add(f"char:{ch}")
+                # Add best-effort VK equivalent for alpha keys so
+                # char-based configs match vk-based events.
+                if len(ch) == 1 and "a" <= ch <= "z":
+                    tokens.add(f"vk:{ord(ch.upper())}")
+
+        return tokens
 
     def _is_hotkey_pressed(self) -> bool:
         """
         Check if the hotkey combination is currently pressed.
+        Supports both left and right variants of modifier keys.
 
         Returns:
             bool: True if hotkey is pressed
@@ -156,28 +199,47 @@ class HotkeyManager:
         if not self._hotkey_combination:
             return False
 
+        # Derive tokens from the live pressed-keys set so matching remains
+        # correct even when tests or internal callers manipulate _pressed_keys
+        # directly.
+        pressed_tokens = set()
+        for pressed_key in self._pressed_keys:
+            pressed_tokens.update(self._key_tokens(pressed_key))
+
         # Check if all keys in combination are pressed
         for key in self._hotkey_combination:
-            if key not in self._pressed_keys:
+            required_tokens = self._key_tokens(key)
+            if not required_tokens:
+                return False
+            if required_tokens.isdisjoint(pressed_tokens):
                 return False
 
         return True
 
     def register(self, callback: Callable[[], None]) -> bool:
         """
-        Register a callback to be invoked when hotkey is pressed.
+        Register the hotkey with a callback function.
 
         Args:
             callback: Function to call when hotkey is pressed
 
         Returns:
-            bool: True if registration successful
+            bool: True if registered successfully
         """
         with self._lock:
             if self._active:
+                logger.warning("Hotkey already registered")
+                return False
+
+            if not callback:
+                logger.error("Cannot register hotkey without callback")
                 return False
 
             self._callback = callback
+
+            # Initialize executor immediately to avoid delay on first hotkey press
+            if self._executor is None:
+                self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="hotkey_callback")
 
             # Start the keyboard listener
             self._listener = keyboard.Listener(
@@ -187,6 +249,8 @@ class HotkeyManager:
             self._listener.start()
             self._active = True
 
+            logger.info(f"Hotkey '{self._hotkey_string}' registered successfully")
+            logger.debug(f"Keyboard listener started: {self._listener}")
             return True
 
     def unregister(self) -> None:
@@ -202,6 +266,9 @@ class HotkeyManager:
                 self._executor = None
             self._callback = None
             self._active = False
+            self._hotkey_latched = False
+            self._pressed_keys.clear()
+            self._pressed_key_tokens.clear()
             logger.debug("Hotkey unregistered")
 
     def set_hotkey(self, hotkey_string: str) -> bool:
@@ -218,6 +285,8 @@ class HotkeyManager:
             HotkeyValidationError: If hotkey string is invalid
         """
         was_active = self._active
+        # Preserve the callback before unregistering
+        saved_callback = self._callback
 
         # Unregister if active
         if was_active:
@@ -238,9 +307,9 @@ class HotkeyManager:
                 pass
             raise
 
-        # Re-register if was active
-        if was_active and self._callback:
-            return self.register(self._callback)
+        # Re-register if was active, using the preserved callback
+        if was_active and saved_callback:
+            return self.register(saved_callback)
 
         logger.info(f"Hotkey changed to '{hotkey_string}'")
         return True

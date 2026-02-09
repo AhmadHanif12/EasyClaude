@@ -85,8 +85,21 @@ def check_single_instance() -> bool:
     """
     instance = SingleInstance()
     if instance.is_already_running():
-        print("Another instance of EasyClaude is already running.")
-        print("Only one instance is allowed at a time.")
+        # GUI builds do not show stdout/stderr, so surface this as a dialog.
+        try:
+            MB_OK = 0x00000000
+            MB_ICONWARNING = 0x00000030
+            MB_TOPMOST = 0x00040000
+            ctypes.windll.user32.MessageBoxW(
+                None,
+                "EasyClaude is already running in your system tray.\n\nClose the existing instance before starting a new one.",
+                "EasyClaude",
+                MB_OK | MB_ICONWARNING | MB_TOPMOST,
+            )
+        except Exception:
+            # Fallback in case user32 is unavailable.
+            print("Another instance of EasyClaude is already running.")
+            print("Only one instance is allowed at a time.")
         return False
 
     # Store the instance so it gets released on exit

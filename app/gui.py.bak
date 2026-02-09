@@ -1,0 +1,569 @@
+"""
+GUI launcher for EasyClaude.
+
+Uses tkinter for a simple, always-on-top launcher window.
+Optimized for fast startup and response.
+Thread-safe: GUI can be shown from any thread using a message queue.
+"""
+
+import tkinter as tk
+from tkinter import ttk, filedialog, messagebox
+from typing import Callable, Optional
+import os
+import threading
+import queue
+import logging
+
+
+# Modern color scheme - Dark theme inspired by VS Code
+
+class ModernTheme:
+    """Color palette for modern dark theme styling."""
+
+    # Background colors
+    BG_PRIMARY = "#1e1e1e"      # Main window background
+    BG_SECONDARY = "#252526"    # Frame/panel background
+    BG_TERTIARY = "#2d2d30"     # Input/element background
+    BG_HOVER = "#37373d"        # Hover state
+    BG_ACTIVE = "#094771"       # Active/pressed state
+
+    # Text colors
+    FG_PRIMARY = "#cccccc"      # Primary text
+    FG_SECONDARY = "#858585"    # Secondary/disabled text
+    FG_ACCENT = "#ffffff"       # Accent/important text
+
+    # Accent colors
+    ACCENT = "#007acc"          # Primary accent (blue)
+    ACCENT_HOVER = "#1c97ea"    # Accent hover state
+    ACCENT_TEXT = "#ffffff"     # Text on accent buttons
+
+    # Border colors
+    BORDER = "#3c3c3c"          # Standard border
+    BORDER_FOCUS = "#007acc"    # Focused border
+
+    # Status colors
+    SUCCESS = "#4ec9b0"         # Green/success
+    WARNING = "#dcdcaa"         # Yellow/warning
+    ERROR = "#f14c4c"           # Red/error
+
+    # Dimensions
+    PADDING_LARGE = 20
+    PADDING_MEDIUM = 12
+    PADDING_SMALL = 8
+    PADDING_TINY = 4
+
+    BUTTON_WIDTH = 45
+    BUTTON_HEIGHT = 32
+
+
+class LauncherGUI:
+    """
+    Main launcher GUI window.
+
+    Features:
+    - Always-on-top
+    - Centered on screen
+    - Directory picker + text entry
+    - Command selection buttons
+    - PowerShell checkbox
+    - Fast show/hide without recreating window
+    - Thread-safe: can be shown from background threads
+    """
+
+    # Available commands
+    COMMANDS = [
+        "claude",
+        "claude --continue",
+        "claude --dangerously-skip-permissions",
+    ]
+
+    def __init__(self, launch_callback: Callable[[str, str, bool], None]):
+        """
+        Initialize the launcher GUI.
+
+        Args:
+            launch_callback: Callback function(directory, command, use_powershell)
+        """
+        self._launch_callback = launch_callback
+        self._root: Optional[tk.Tk] = None
+        self._lock = threading.Lock()
+        self._initialized = False
+        # Thread-safe queue for cross-thread GUI operations
+        self._command_queue: queue.Queue = queue.Queue()
+        # Track launch threads for proper cleanup
+        self._launch_threads: list[threading.Thread] = []
+
+    def _ensure_initialized(self):
+        """Ensure the GUI is created (lazy initialization)."""
+        if self._initialized:
+            return
+
+        with self._lock:
+            if self._initialized:
+                return
+
+            # Create the root window
+            self._root = tk.Tk()
+            self._root.title("EasyClaude")
+            self._root.resizable(False, False)
+
+            # Apply modern theme styling
+            self._apply_theme()
+
+            # Hide initially
+            self._root.withdraw()
+
+            # Make always-on-top
+            self._root.attributes('-topmost', True)
+
+            # Center on screen
+            width = 550
+            height = 400
+            self._root.update_idletasks()
+            screen_width = self._root.winfo_screenwidth()
+            screen_height = self._root.winfo_screenheight()
+            x = (screen_width - width) // 2
+            y = (screen_height - height) // 2
+            self._root.geometry(f"{width}x{height}+{x}+{y}")
+
+            # Main frame with custom background
+            main_frame = tk.Frame(
+                self._root,
+                bg=ModernTheme.BG_PRIMARY,
+                padx=ModernTheme.PADDING_LARGE,
+                pady=ModernTheme.PADDING_LARGE
+            )
+            main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+            main_frame.columnconfigure(0, weight=1)
+
+            # Directory label with custom styling
+            dir_label = tk.Label(
+                main_frame,
+                text="Working Directory:",
+                bg=ModernTheme.BG_PRIMARY,
+                fg=ModernTheme.FG_PRIMARY,
+                font=("Segoe UI", 10, "normal"),
+                anchor="w"
+            )
+            dir_label.grid(row=0, column=0, columnspan=2, sticky=tk.W, pady=(0, ModernTheme.PADDING_TINY))
+
+            # Directory entry frame
+            entry_frame = tk.Frame(main_frame, bg=ModernTheme.BG_PRIMARY)
+            entry_frame.grid(row=1, column=0, columnspan=2, sticky=tk.W, pady=(ModernTheme.PADDING_TINY, ModernTheme.PADDING_MEDIUM))
+
+            # Directory entry
+            directory_var = tk.StringVar()
+            self._directory_var = directory_var
+            dir_entry = tk.Entry(
+                entry_frame,
+                textvariable=directory_var,
+                bg=ModernTheme.BG_TERTIARY,
+                fg=ModernTheme.FG_PRIMARY,
+                insertbackground=ModernTheme.FG_PRIMARY,
+                relief="flat",
+                highlightthickness=1,
+                highlightbackground=ModernTheme.BORDER,
+                highlightcolor=ModernTheme.BORDER_FOCUS,
+                font=("Segoe UI", 10),
+                width=35
+            )
+            dir_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, ModernTheme.PADDING_SMALL))
+
+            # Browse button with custom styling
+            browse_btn = tk.Button(
+                entry_frame,
+                text="Browse...",
+                command=lambda: self._browse_directory(directory_var),
+                bg=ModernTheme.BG_SECONDARY,
+                fg=ModernTheme.FG_PRIMARY,
+                activebackground=ModernTheme.BG_ACTIVE,
+                activeforeground=ModernTheme.FG_ACCENT,
+                relief="flat",
+                highlightthickness=1,
+                highlightbackground=ModernTheme.BORDER,
+                highlightcolor=ModernTheme.BORDER_FOCUS,
+                font=("Segoe UI", 9),
+                cursor="hand2",
+                width=10,
+                padx=ModernTheme.PADDING_MEDIUM,
+                pady=ModernTheme.PADDING_SMALL
+            )
+            browse_btn.pack(side=tk.LEFT)
+            self._add_hover_effect(browse_btn)
+
+            # Command label with custom styling
+            cmd_label = tk.Label(
+                main_frame,
+                text="Command:",
+                bg=ModernTheme.BG_PRIMARY,
+                fg=ModernTheme.FG_PRIMARY,
+                font=("Segoe UI", 10, "normal"),
+                anchor="w"
+            )
+            cmd_label.grid(row=2, column=0, columnspan=2, sticky=tk.W, pady=(0, ModernTheme.PADDING_TINY))
+
+            # Command buttons with modern styling
+            for i, cmd in enumerate(self.COMMANDS):
+                btn = tk.Button(
+                    main_frame,
+                    text=cmd,
+                    command=lambda c=cmd: self._do_launch(c),
+                    bg=ModernTheme.ACCENT,
+                    fg=ModernTheme.ACCENT_TEXT,
+                    activebackground=ModernTheme.ACCENT_HOVER,
+                    activeforeground=ModernTheme.ACCENT_TEXT,
+                    relief="flat",
+                    highlightthickness=0,
+                    font=("Segoe UI", 10, "normal"),
+                    cursor="hand2",
+                    width=ModernTheme.BUTTON_WIDTH,
+                    height=ModernTheme.BUTTON_HEIGHT // 10,
+                    padx=ModernTheme.PADDING_MEDIUM,
+                    pady=ModernTheme.PADDING_SMALL
+                )
+                btn.grid(row=i + 3, column=0, columnspan=2, pady=ModernTheme.PADDING_TINY, sticky="ew")
+                self._add_hover_effect(btn, is_accent=True)
+
+            # PowerShell checkbox with custom styling
+            powershell_var = tk.BooleanVar(value=False)
+            self._powershell_var = powershell_var
+
+            checkbox_frame = tk.Frame(main_frame, bg=ModernTheme.BG_PRIMARY)
+            checkbox_frame.grid(row=6, column=0, columnspan=2, pady=(ModernTheme.PADDING_MEDIUM, 0), sticky=tk.W)
+
+            # Custom checkbox using Canvas for better styling
+            self._ps_checkbox_var = tk.BooleanVar(value=False)
+            self._ps_checkbox = self._create_custom_checkbox(
+                checkbox_frame,
+                "Use PowerShell (instead of Windows Terminal)",
+                self._ps_checkbox_var
+            )
+            self._ps_checkbox.pack(anchor="w")
+
+            # Sync the checkbox variables
+            self._sync_checkbox_vars()
+
+            # Close button with modern styling
+            close_btn = tk.Button(
+                main_frame,
+                text="Close",
+                command=self.hide,
+                bg=ModernTheme.BG_SECONDARY,
+                fg=ModernTheme.FG_PRIMARY,
+                activebackground=ModernTheme.BG_ACTIVE,
+                activeforeground=ModernTheme.FG_ACCENT,
+                relief="flat",
+                highlightthickness=1,
+                highlightbackground=ModernTheme.BORDER,
+                highlightcolor=ModernTheme.BORDER_FOCUS,
+                font=("Segoe UI", 9),
+                cursor="hand2",
+                width=10,
+                padx=ModernTheme.PADDING_MEDIUM,
+                pady=ModernTheme.PADDING_SMALL
+            )
+            close_btn.grid(row=7, column=0, columnspan=2, pady=(ModernTheme.PADDING_MEDIUM, 0))
+            self._add_hover_effect(close_btn)
+
+            # Bind Enter key to launch, Escape to close
+            self._root.bind('<Return>', lambda e: self._do_launch(self.COMMANDS[0]))
+            self._root.bind('<Escape>', lambda e: self.hide())
+
+            # Handle window close button
+            self._root.protocol("WM_DELETE_WINDOW", self.hide)
+
+            # Set up periodic command queue processing
+            self._process_command_queue()
+
+            self._initialized = True
+
+    def _process_command_queue(self):
+        """Process pending commands from the queue (called periodically)."""
+        try:
+            while True:
+                cmd = self._command_queue.get_nowait()
+                cmd_name = cmd.get("cmd")
+                if cmd_name == "show":
+                    directory = cmd.get("directory", "")
+                    use_powershell = cmd.get("use_powershell")
+                    if directory:
+                        self._directory_var.set(directory)
+                    if use_powershell is not None and hasattr(self, "_powershell_var"):
+                        self._powershell_var.set(bool(use_powershell))
+                    self._root.deiconify()
+                    self._root.lift()
+                    self._root.focus_force()
+                    self._root.after(10, lambda: self._root.focus_set() if self._root else None)
+                elif cmd_name == "hide":
+                    self._root.withdraw()
+        except queue.Empty:
+            pass
+
+        # Schedule next queue processing
+        if self._root:
+            self._root.after(50, self._process_command_queue)
+
+
+    def _apply_theme(self):
+        """Apply modern theme to tkinter widgets."""
+        style = ttk.Style()
+        style.theme_use('clam')
+        
+        # Configure styles with modern colors
+        style.configure('TFrame', background=ModernTheme.BG_PRIMARY)
+        style.configure('TLabel', 
+                       background=ModernTheme.BG_PRIMARY, 
+                       foreground=ModernTheme.FG_PRIMARY,
+                       font=('Segoe UI', 10))
+        style.configure('TButton',
+                       background=ModernTheme.ACCENT,
+                       foreground=ModernTheme.ACCENT_TEXT,
+                       borderwidth=0,
+                       focuscolor='none',
+                       padding=10)
+        style.map('TButton',
+                 background=[('active', ModernTheme.ACCENT_HOVER)])
+        style.configure('TCheckbutton',
+                       background=ModernTheme.BG_PRIMARY,
+                       foreground=ModernTheme.FG_PRIMARY,
+                       font=('Segoe UI', 10))
+
+    def _add_hover_effect(self, button, is_accent=False):
+        """Add hover effect to a button."""
+        def on_enter(e):
+            if is_accent:
+                button.config(bg=ModernTheme.ACCENT_HOVER)
+            else:
+                button.config(bg=ModernTheme.BG_HOVER)
+        
+        def on_leave(e):
+            if is_accent:
+                button.config(bg=ModernTheme.ACCENT)
+            else:
+                button.config(bg=ModernTheme.BG_SECONDARY)
+        
+        button.bind('<Enter>', on_enter)
+        button.bind('<Leave>', on_leave)
+
+    def _create_custom_checkbox(self, parent, text, variable):
+        """Create a custom styled checkbox."""
+        frame = tk.Frame(parent, bg=ModernTheme.BG_PRIMARY)
+        
+        # Checkbox canvas
+        canvas = tk.Canvas(
+            frame,
+            width=18,
+            height=18,
+            bg=ModernTheme.BG_PRIMARY,
+            highlightthickness=1,
+            highlightbackground=ModernTheme.BORDER,
+            highlightcolor=ModernTheme.BORDER_FOCUS
+        )
+        canvas.pack(side=tk.LEFT, padx=(0, ModernTheme.PADDING_SMALL))
+        
+        # Draw checkbox
+        def draw_checkbox():
+            canvas.delete("all")
+            if variable.get():
+                canvas.create_rectangle(2, 2, 16, 16, fill=ModernTheme.ACCENT, outline="")
+                canvas.create_line(4, 9, 7, 12, 14, 5, fill=ModernTheme.ACCENT_TEXT, width=2)
+            else:
+                canvas.create_rectangle(2, 2, 16, 16, fill=ModernTheme.BG_TERTIARY, outline=ModernTheme.BORDER)
+        
+        draw_checkbox()
+        
+        # Toggle on click
+        def toggle(event):
+            variable.set(not variable.get())
+            draw_checkbox()
+            if hasattr(self, '_powershell_var'):
+                self._powershell_var.set(variable.get())
+        
+        canvas.bind('<Button-1>', toggle)
+        
+        # Label
+        label = tk.Label(
+            frame,
+            text=text,
+            bg=ModernTheme.BG_PRIMARY,
+            fg=ModernTheme.FG_PRIMARY,
+            font=('Segoe UI', 10)
+        )
+        label.pack(side=tk.LEFT)
+        label.bind('<Button-1>', toggle)
+        
+        # Store reference to canvas for updating
+        variable.trace_add('write', lambda *args: draw_checkbox())
+        
+        return frame
+
+    def _sync_checkbox_vars(self):
+        """Sync checkbox variables."""
+        if hasattr(self, '_ps_checkbox_var') and hasattr(self, '_powershell_var'):
+            self._ps_checkbox_var.set(self._powershell_var.get())
+
+    def _update_recent_directories(self, directory: str):
+        """Update the recent directories list in config."""
+        if not directory or not os.path.isdir(directory):
+            return
+        
+        cfg = config.get_config()
+        recent = list(cfg.recent_directories)
+        
+        # Remove if already exists (to move to top)
+        if directory in recent:
+            recent.remove(directory)
+        
+        # Add to front
+        recent.insert(0, directory)
+        
+        # Keep max 15
+        recent = recent[:15]
+        
+        # Update config
+        config.update_config(recent_directories=recent)
+
+    def _populate_directory_combobox(self):
+        """Populate the directory combobox with recent directories."""
+        if hasattr(self, '_dir_combobox'):
+            cfg = config.get_config()
+            self._dir_combobox['values'] = cfg.recent_directories
+
+    def show(self, initial_directory: str = "", use_powershell: Optional[bool] = None):
+        """
+        Show the launcher window (thread-safe).
+
+        This can be called from any thread safely.
+        The GUI operations will be executed on the main thread via the command queue.
+        """
+        self._ensure_initialized()
+        # Queue the show command for processing on the main thread
+        self._command_queue.put(
+            {
+                "cmd": "show",
+                "directory": initial_directory,
+                "use_powershell": use_powershell,
+            }
+        )
+
+    def hide(self):
+        """Hide the launcher window (thread-safe)."""
+        if self._root:
+            # Can be called from GUI thread directly
+            try:
+                self._root.withdraw()
+            except tk.TclError:
+                # If called from wrong thread, queue it
+                self._command_queue.put({"cmd": "hide"})
+
+    def _browse_directory(self, directory_var: tk.StringVar):
+        """Open directory picker dialog."""
+        current_dir = directory_var.get()
+        if current_dir and os.path.isdir(current_dir):
+            initial_dir = current_dir
+        else:
+            initial_dir = os.getcwd()
+
+        directory = filedialog.askdirectory(
+            title="Select Working Directory",
+            initialdir=initial_dir,
+            parent=self._root,
+            mustexist=True
+        )
+
+        if directory:
+            directory_var.set(directory)
+
+    def _do_launch(self, command: str):
+        """
+        Execute launch with current settings and hide window.
+
+        Args:
+            command: Command to execute
+        """
+        directory = self._directory_var.get().strip()
+
+        if not directory:
+            messagebox.showwarning(
+                "No Directory",
+                "Please select a directory first.",
+                parent=self._root
+            )
+            return
+
+        if not os.path.isdir(directory):
+            messagebox.showerror(
+                "Invalid Directory",
+                f"The directory '{directory}' does not exist.",
+                parent=self._root
+            )
+            return
+
+        use_powershell = self._powershell_var.get()
+
+        # Hide the window immediately
+        self.hide()
+
+        # Call the launch callback in a separate thread
+        # Use non-daemon thread to ensure subprocess completes properly
+        if self._launch_callback:
+            def run_callback():
+                try:
+                    self._launch_callback(directory, command, use_powershell)
+                except Exception as e:
+                    logger = logging.getLogger(__name__)
+                    logger.error(f"Error in launch callback: {e}", exc_info=True)
+                finally:
+                    # Remove self from tracked threads
+                    with self._lock:
+                        if threading.current_thread() in self._launch_threads:
+                            self._launch_threads.remove(threading.current_thread())
+
+            thread = threading.Thread(target=run_callback, daemon=False)
+            with self._lock:
+                self._launch_threads.append(thread)
+            thread.start()
+
+    def update(self):
+        """
+        Process pending tkinter events.
+
+        Call this periodically to ensure the GUI remains responsive
+        when running in an environment with multiple event loops.
+        """
+        if self._root and self._initialized:
+            try:
+                self._root.update()
+            except tk.TclError:
+                # GUI has been destroyed or is in invalid state
+                pass
+            except Exception as e:
+                # Log other exceptions but don't crash the application
+                # update() is called periodically and should handle errors gracefully
+                logging.getLogger(__name__).debug(f"Exception in GUI update(): {e}")
+
+    def destroy(self):
+        """Cleanup and close the GUI."""
+        # Wait for launch threads to complete (with timeout)
+        with self._lock:
+            threads = list(self._launch_threads)
+
+        for thread in threads:
+            if thread.is_alive():
+                thread.join(timeout=2.0)
+
+        if self._root:
+            try:
+                self._root.destroy()
+            except tk.TclError as e:
+                logging.getLogger(__name__).debug(f"TclError during destroy: {e}")
+            except Exception as e:
+                logging.getLogger(__name__).warning(f"Error during GUI destroy: {e}")
+            self._root = None
+        self._initialized = False
+
+
+__all__ = ["LauncherGUI"]
+
+
+__all__ = ["LauncherGUI"]
