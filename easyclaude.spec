@@ -20,9 +20,17 @@ try:
 
     tkinter_pkg_dir = os.path.dirname(tkinter.__file__)
     tkinter_pyd = _tkinter.__file__
+
+    # Find Tcl/Tk library directories
+    python_prefix = sys.prefix
+    tcl_dir = os.path.join(python_prefix, 'tcl')
+    tcl_lib_dir = os.path.join(tcl_dir, 'tcl8.6')
+    tk_lib_dir = os.path.join(tcl_dir, 'tk8.6')
 except Exception:
     tkinter_pkg_dir = None
     tkinter_pyd = None
+    tcl_lib_dir = None
+    tk_lib_dir = None
 
 
 def _existing(entry):
@@ -42,6 +50,9 @@ extra_datas = [
     _existing((os.path.join(base_dir, 'assets', 'icon.ico'), 'assets')),
     _existing((os.path.join(base_dir, 'assets', 'icon.png'), 'assets')),
     _existing((tkinter_pkg_dir, 'tkinter')),
+    # Tcl/Tk library directories - required for tkinter to work in frozen app
+    _existing((tcl_lib_dir, 'tcl')),
+    _existing((tk_lib_dir, 'tk')),
 ]
 extra_datas = [x for x in extra_datas if x is not None]
 
@@ -84,9 +95,9 @@ a = Analysis(
         'queue',
         'glob',
     ],
-    hookspath=[],
+    hookspath=[os.path.join(base_dir, 'hooks')],
     hooksconfig={},
-    runtime_hooks=[],
+    runtime_hooks=[os.path.join(base_dir, 'hooks', 'runtime_tkinter.py')],
     excludes=[
         # Exclude testing and dev packages
         'pytest',

@@ -9,6 +9,7 @@ Example:
     launcher.launch_claude(r"C:\Users\Projects", "claude --continue")
 """
 import os
+import re
 import subprocess
 import shutil
 import logging
@@ -93,13 +94,17 @@ class WindowsTerminalLauncher(TerminalLauncher):
         else:
             return [self._powershell_exe, "-NoExit", "-Command", ps_command]
 
+    # Strict whitelist for allowed command patterns to prevent injection
+    # Only allows: claude followed by optional flags (e.g., --continue, --plan)
+    _VALID_COMMAND_PATTERN = re.compile(r'^claude(?:\s+(?:--?[a-z-]+))*$')
+
     def _build_powershell_command(self, directory: str, command: str) -> str:
         """
         Build a PowerShell command string for execution.
 
-        Uses proper escaping to prevent command injection.
-        Directory is escaped using PowerShell's escape character and wrapped in quotes.
-        Command is validated and escaped to prevent injection.
+        Uses strict validation and proper escaping to prevent command injection.
+        Directory is validated for dangerous characters before being escaped.
+        Command must match whitelist pattern before being accepted.
 
         Args:
             directory: The validated directory path
@@ -107,19 +112,31 @@ class WindowsTerminalLauncher(TerminalLauncher):
 
         Returns:
             A safely escaped PowerShell command string
-        """
-        # Escape backticks and quotes for PowerShell
-        # PowerShell uses backtick ` as escape character
-        escaped_dir = directory.replace('`', '``').replace('"', '`"')
 
-        # Escape the command to prevent injection
-        # Only allow safe characters in the command arguments
-        # Escape any backticks, quotes, and special PowerShell characters
-        escaped_cmd = command.replace('`', '``').replace('"', '`"').replace('$', '`$').replace("'", "''")
+        Raises:
+            LaunchFailedError: If command or directory contains dangerous content
+        """
+        # Validate command format strictly - whitelist approach
+        if not self._VALID_COMMAND_PATTERN.match(command):
+            raise LaunchFailedError(
+                f"Invalid command format: {command}. "
+                "Only 'claude' with optional flags (e.g., --continue) is allowed."
+            )
+
+        # Validate directory has no dangerous characters that could break out
+        dangerous_chars = ['\n', '\r', '\x00', ';', '&', '|', '$', '`', '"', "'"]
+        if any(c in directory for c in dangerous_chars):
+            raise LaunchFailedError(
+                f"Directory path contains invalid characters. "
+                "Please use a standard path without special characters."
+            )
+
+        # Escape backticks for PowerShell (uses backtick as escape character)
+        escaped_dir = directory.replace('`', '``')
 
         # Build command with Set-Location (safer than cd)
-        # Using single quotes around path to prevent variable expansion
-        ps_command = f"Set-Location -LiteralPath '{escaped_dir}'; {escaped_cmd}"
+        # Using -LiteralPath prevents any interpretation of special characters in path
+        ps_command = f"Set-Location -LiteralPath '{escaped_dir}'; {command}"
 
         return ps_command
 

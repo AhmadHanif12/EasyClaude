@@ -16,6 +16,21 @@ class MacOSTerminalLauncher(TerminalLauncher):
     Uses AppleScript to launch Terminal.app with specific command.
     """
 
+    def _escape_applescript_string(self, s: str) -> str:
+        """
+        Escape a string for safe use in AppleScript.
+
+        AppleScript uses single quotes for string literals, so we escape
+        them by doubling. This prevents breaking out of the string context.
+
+        Args:
+            s: The string to escape
+
+        Returns:
+            The escaped string safe for AppleScript
+        """
+        return s.replace("'", "'\\''")
+
     def launch_claude(
         self,
         directory: str,
@@ -41,11 +56,15 @@ class MacOSTerminalLauncher(TerminalLauncher):
             raise LaunchFailedError("Terminal.app not found on this system")
 
         try:
-            # Use osascript to run AppleScript
+            # Escape strings to prevent AppleScript injection
+            escaped_dir = self._escape_applescript_string(str(validated_dir))
+            escaped_cmd = self._escape_applescript_string(validated_cmd)
+
+            # Use osascript to run AppleScript with properly escaped strings
             script = f'''
             tell application "Terminal"
                 activate
-                do script "cd '{validated_dir}' && {validated_cmd}"
+                do script "cd '{escaped_dir}' && {escaped_cmd}"
             end tell
             '''
 
@@ -66,10 +85,14 @@ class MacOSTerminalLauncher(TerminalLauncher):
         Returns:
             A list of command arguments for subprocess
         """
+        # Escape strings to prevent AppleScript injection
+        escaped_dir = self._escape_applescript_string(directory)
+        escaped_cmd = self._escape_applescript_string(command)
+
         script = f'''
         tell application "Terminal"
             activate
-            do script "cd '{directory}' && {command}"
+            do script "cd '{escaped_dir}' && {escaped_cmd}"
         end tell
         '''
         return ["osascript", "-e", script]

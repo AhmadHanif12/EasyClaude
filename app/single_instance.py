@@ -6,7 +6,10 @@ Uses a named mutex on Windows to ensure only one instance runs at a time.
 
 import sys
 import ctypes
+import logging
 from ctypes import wintypes
+
+logger = logging.getLogger(__name__)
 
 
 class SingleInstance:
@@ -47,14 +50,16 @@ class SingleInstance:
             if self._mutex is None:
                 # Failed to create mutex, assume not running
                 # (or we don't have permissions, but let it proceed)
+                logger.warning("Failed to create mutex - allowing instance to run")
                 return False
 
             # Check if mutex already existed
             error_code = ctypes.windll.kernel32.GetLastError()
             return error_code == ERROR_ALREADY_EXISTS
 
-        except Exception:
-            # If anything goes wrong, allow the instance to run
+        except Exception as e:
+            # If anything goes wrong, log and allow the instance to run
+            logger.warning(f"Failed to check mutex: {e} - allowing instance to run")
             return False
 
     def release(self) -> None:
@@ -63,8 +68,8 @@ class SingleInstance:
             try:
                 ctypes.windll.kernel32.ReleaseMutex(self._mutex)
                 ctypes.windll.kernel32.CloseHandle(self._mutex)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Failed to release mutex: {e}")
             self._mutex = None
 
     def __enter__(self):
@@ -96,8 +101,9 @@ def check_single_instance() -> bool:
                 "EasyClaude",
                 MB_OK | MB_ICONWARNING | MB_TOPMOST,
             )
-        except Exception:
+        except Exception as e:
             # Fallback in case user32 is unavailable.
+            logger.warning(f"Failed to show message box: {e}")
             print("Another instance of EasyClaude is already running.")
             print("Only one instance is allowed at a time.")
         return False

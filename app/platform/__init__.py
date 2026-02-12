@@ -12,11 +12,12 @@ Usage:
     launcher.launch_claude(r"C:\\Projects", "claude --continue")
 """
 
-from abc import ABC, abstractmethod
-from pathlib import Path
+import re
+import logging
 import platform
 import subprocess
-import logging
+from abc import ABC, abstractmethod
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +58,10 @@ class TerminalLauncher(ABC):
             def is_available(self) -> bool:
                 return shutil.which("my-terminal") is not None
     """
+
+    # Strict whitelist for allowed command patterns to prevent command injection
+    # Only allows: claude followed by optional flags (e.g., --continue, --plan, --dangerously-skip-permissions)
+    _VALID_COMMAND_PATTERN = re.compile(r'^claude(?:\s+(?:--?[a-z-]+))*$', re.IGNORECASE)
 
     @abstractmethod
     def launch_claude(self, directory: str, command: str) -> None:
@@ -126,13 +131,16 @@ class TerminalLauncher(ABC):
 
     def _validate_command(self, command: str) -> str:
         """
-        Validate and sanitize the command string.
+        Validate and sanitize the command string using strict whitelist validation.
+
+        This method prevents command injection by only allowing commands that
+        match a strict pattern: 'claude' followed by optional flags.
 
         Args:
             command: The command to validate
 
         Returns:
-            The validated command string
+            The validated and normalized command string
 
         Raises:
             LaunchFailedError: If the command is invalid or potentially dangerous
@@ -140,10 +148,17 @@ class TerminalLauncher(ABC):
         if not command or not command.strip():
             raise LaunchFailedError("Command cannot be empty")
 
-        # Basic validation - command should start with "claude"
+        # Strip whitespace and validate against whitelist pattern
         command = command.strip()
-        if not command.lower().startswith("claude"):
-            raise LaunchFailedError(f"Invalid command: {command}")
+
+        # Use regex whitelist to prevent command injection
+        # Only allows: claude [ --flag1 --flag2 ... ]
+        # Rejects: claude; rm -rf /, claude | evil, claude && bad, etc.
+        if not self._VALID_COMMAND_PATTERN.match(command):
+            raise LaunchFailedError(
+                f"Invalid command format: {command}. "
+                "Only 'claude' with optional flags (e.g., --continue, --plan) is allowed."
+            )
 
         return command
 
